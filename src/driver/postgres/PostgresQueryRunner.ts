@@ -1326,15 +1326,24 @@ export class PostgresQueryRunner
                 `Column "${oldTableColumnOrName}" was not found in the "${table.name}" table.`,
             )
 
-        const isVarcharOrChar = [
-            "character varying",
-            "varchar",
-            "character",
-            "char",
-        ].includes(newColumn.type)
+        const oldColumnType =
+            oldColumn.type === "varchar"
+                ? "character varying"
+                : oldColumn.type === "char"
+                  ? "character"
+                  : oldColumn.type
+        const newColumnType =
+            newColumn.type === "varchar"
+                ? "character varying"
+                : newColumn.type === "char"
+                  ? "character"
+                  : newColumn.type
+        const isVarcharOrChar = ["character varying", "character"].includes(
+            newColumnType,
+        )
         const canAlterLength =
             oldColumn.length !== newColumn.length &&
-            oldColumn.type === newColumn.type &&
+            oldColumnType === newColumnType &&
             isVarcharOrChar &&
             !oldColumn.isArray &&
             !newColumn.isArray &&
@@ -1344,7 +1353,7 @@ export class PostgresQueryRunner
             newColumn.generatedType !== "STORED"
 
         if (
-            oldColumn.type !== newColumn.type ||
+            (oldColumn.type !== newColumn.type && !canAlterLength) ||
             (oldColumn.length !== newColumn.length && !canAlterLength) ||
             newColumn.isArray !== oldColumn.isArray ||
             (!oldColumn.generatedType &&
