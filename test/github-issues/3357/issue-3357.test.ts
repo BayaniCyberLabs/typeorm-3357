@@ -40,7 +40,7 @@ describe("github issues > #3357 postgres character length SQL", () => {
 
     function characterColumn(
         name: string,
-        type: "varchar" | "char" | "character",
+        type: "varchar" | "character varying" | "char" | "character",
         length: string,
     ) {
         return new TableColumn({ name, type, length, isNullable: true })
@@ -101,6 +101,34 @@ describe("github issues > #3357 postgres character length SQL", () => {
         })
     }
 
+    for (const [oldType, newType] of [
+        ["character varying", "varchar"],
+        ["varchar", "character varying"],
+        ["character", "char"],
+        ["char", "character"],
+    ] as const) {
+        it(`generates ALTER COLUMN TYPE instead of DROP COLUMN for ${oldType} to ${newType} length growth`, async () => {
+            const runner = makeRunner()
+            const oldColumn = characterColumn("value", oldType, "50")
+            const newColumn = characterColumn("value", newType, "51")
+            const table = new Table({
+                name: "issue_3357",
+                columns: [oldColumn],
+            })
+            const queries = capturedQueries(runner)
+            const dropSpy = sinon.stub(runner, "dropColumn").resolves()
+            const addSpy = sinon.stub(runner, "addColumn").resolves()
+
+            await runner.changeColumn(table, oldColumn, newColumn)
+
+            expect(dropSpy.called).to.equal(false)
+            expect(addSpy.called).to.equal(false)
+            expect(queries.up.map((query) => query.query)).to.deep.equal([
+                `ALTER TABLE "issue_3357" ALTER COLUMN "value" TYPE ${newType}(51)`,
+            ])
+        })
+    }
+
     it("retains DROP and ADD for a varchar-to-integer type-family change", async () => {
         const runner = makeRunner()
         const oldColumn = characterColumn("value", "varchar", "50")
@@ -134,7 +162,7 @@ describe("github issues > #3357 postgres character length live", () => {
 
     async function createValueTable(
         dataSource: DataSource,
-        type: "varchar" | "char" | "character",
+        type: "varchar" | "character varying" | "char" | "character",
         length: string,
     ) {
         const queryRunner = dataSource.createQueryRunner()
@@ -264,6 +292,57 @@ describe("github issues > #3357 postgres character length live", () => {
                                 'SELECT RTRIM("value") AS "value" FROM "issue_3357_value"',
                             ),
                         ).to.deep.equal([{ value: "character data" }])
+                    } finally {
+                        await queryRunner.query(
+                            'DROP TABLE IF EXISTS "issue_3357_value"',
+                        )
+                        await queryRunner.release()
+                    }
+                }),
+            )
+        })
+    }
+
+    for (const [oldType, newType, introspectedType] of [
+        ["character varying", "varchar", "character varying"],
+        ["varchar", "character varying", "character varying"],
+        ["character", "char", "character"],
+        ["char", "character", "character"],
+    ] as const) {
+        it(`preserves rows for introspected ${oldType} to ${newType} length growth`, async () => {
+            await Promise.all(
+                dataSources.map(async (dataSource) => {
+                    const queryRunner = await createValueTable(
+                        dataSource,
+                        oldType,
+                        "50",
+                    )
+                    try {
+                        const value = `data survives ${oldType} to ${newType}`
+                        await queryRunner.query(
+                            'INSERT INTO "issue_3357_value" ("value") VALUES ($1)',
+                            [value],
+                        )
+                        const table =
+                            await queryRunner.getTable("issue_3357_value")
+                        const oldColumn = table!.findColumnByName("value")!
+                        expect(oldColumn.type).to.equal(introspectedType)
+                        oldColumn.type = oldType
+                        const newColumn = oldColumn.clone()
+                        newColumn.type = newType
+                        newColumn.length = "51"
+
+                        await queryRunner.changeColumn(
+                            table!,
+                            oldColumn,
+                            newColumn,
+                        )
+
+                        expect(
+                            await queryRunner.query(
+                                'SELECT RTRIM("value") AS "value" FROM "issue_3357_value"',
+                            ),
+                        ).to.deep.equal([{ value }])
                     } finally {
                         await queryRunner.query(
                             'DROP TABLE IF EXISTS "issue_3357_value"',
