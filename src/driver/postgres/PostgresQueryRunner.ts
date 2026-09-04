@@ -1345,6 +1345,7 @@ export class PostgresQueryRunner
             oldColumn.length !== newColumn.length &&
             oldColumnType === newColumnType &&
             isVarcharOrChar &&
+            oldColumn.collation === newColumn.collation &&
             !oldColumn.isArray &&
             !newColumn.isArray &&
             oldColumn.precision === newColumn.precision &&
