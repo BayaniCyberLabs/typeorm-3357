@@ -42,8 +42,15 @@ describe("github issues > #3357 postgres character length SQL", () => {
         name: string,
         type: "varchar" | "character varying" | "char" | "character",
         length: string,
+        collation?: string,
     ) {
-        return new TableColumn({ name, type, length, isNullable: true })
+        return new TableColumn({
+            name,
+            type,
+            length,
+            collation,
+            isNullable: true,
+        })
     }
 
     function capturedQueries(runner: PostgresQueryRunner) {
@@ -147,6 +154,24 @@ describe("github issues > #3357 postgres character length SQL", () => {
         expect(dropSpy.calledOnceWith(table, oldColumn)).to.equal(true)
         expect(addSpy.calledOnceWith(table, newColumn)).to.equal(true)
     })
+
+    it("does not emit length-stripping ALTER statements when varchar length and collation change", async () => {
+        const runner = makeRunner()
+        const oldColumn = characterColumn("value", "character varying", "50")
+        const newColumn = characterColumn("value", "varchar", "51", "C")
+        const table = new Table({ name: "issue_3357", columns: [oldColumn] })
+        const queries = capturedQueries(runner)
+        const dropSpy = sinon.stub(runner, "dropColumn").resolves()
+        const addSpy = sinon.stub(runner, "addColumn").resolves()
+
+        await runner.changeColumn(table, oldColumn, newColumn)
+
+        const sql = queries.up.map((query) => query.query).join("\n")
+        expect(dropSpy.calledOnceWith(table, oldColumn)).to.equal(true)
+        expect(addSpy.calledOnceWith(table, newColumn)).to.equal(true)
+        expect(sql).not.to.contain("TYPE varchar(51)")
+        expect(sql).not.to.contain('TYPE varchar COLLATE "C"')
+    })
 })
 
 describe("github issues > #3357 postgres character length live", () => {
@@ -164,11 +189,12 @@ describe("github issues > #3357 postgres character length live", () => {
         dataSource: DataSource,
         type: "varchar" | "character varying" | "char" | "character",
         length: string,
+        isNullable = false,
     ) {
         const queryRunner = dataSource.createQueryRunner()
         await queryRunner.query('DROP TABLE IF EXISTS "issue_3357_value"')
         await queryRunner.query(
-            `CREATE TABLE "issue_3357_value" ("value" ${type}(${length}) NOT NULL)`,
+            `CREATE TABLE "issue_3357_value" ("value" ${type}(${length}) ${isNullable ? "NULL" : "NOT NULL"})`,
         )
         return queryRunner
     }
@@ -353,6 +379,45 @@ describe("github issues > #3357 postgres character length live", () => {
             )
         })
     }
+
+    it("retains the requested varchar length when it changes with collation", async () => {
+        await Promise.all(
+            dataSources.map(async (dataSource) => {
+                const queryRunner = await createValueTable(
+                    dataSource,
+                    "character varying",
+                    "50",
+                    true,
+                )
+                try {
+                    await queryRunner.query(
+                        'INSERT INTO "issue_3357_value" ("value") VALUES ($1)',
+                        ["mixed length and collation change"],
+                    )
+                    const table = await queryRunner.getTable("issue_3357_value")
+                    const oldColumn = table!.findColumnByName("value")!
+                    const newColumn = oldColumn.clone()
+                    newColumn.type = "varchar"
+                    newColumn.length = "51"
+                    newColumn.collation = "C"
+
+                    await queryRunner.changeColumn(table!, oldColumn, newColumn)
+
+                    const changedTable =
+                        await queryRunner.getTable("issue_3357_value")
+                    const changedColumn =
+                        changedTable!.findColumnByName("value")!
+                    expect(changedColumn.length).to.equal("51")
+                    expect(changedColumn.collation).to.equal("C")
+                } finally {
+                    await queryRunner.query(
+                        'DROP TABLE IF EXISTS "issue_3357_value"',
+                    )
+                    await queryRunner.release()
+                }
+            }),
+        )
+    })
 
     it("alters the old name before renaming and supports the reverse change", async () => {
         await Promise.all(
