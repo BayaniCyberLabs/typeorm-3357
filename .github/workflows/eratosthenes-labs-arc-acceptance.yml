@@ -1,0 +1,63 @@
+name: Eratosthenes Labs ARC acceptance
+
+# SOURCE-ONLY DRAFT. Copy this file to the named repository only after a
+# reviewed activation. A push registers it but cannot execute a workload.
+run-name: Labs ARC ${{ inputs.scenario }} ${{ inputs.nonce }}
+
+on:
+  push:
+    branches: [ci/eratosthenes-labs-arc-acceptance-20260928]
+    paths: [.github/workflows/eratosthenes-labs-arc-acceptance.yml]
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Queue/release or externally canceled lifecycle
+        required: true
+        type: choice
+        options: [queue, cancel]
+      nonce:
+        description: Driver-supplied exact run identity
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  queue-first:
+    if: github.event_name == 'workflow_dispatch' && inputs.scenario == 'queue'
+    runs-on: eratosthenes-labs-typeorm-3357
+    timeout-minutes: 5
+    container: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    steps:
+      - name: Hold the sole heavy execution slot
+        shell: sh
+        run: |
+          set -eu
+          printf '%s\n' 'repo=typeorm-3357 nonce=${{ inputs.nonce }} job=queue-first'
+          sleep 75
+
+  queue-second:
+    if: github.event_name == 'workflow_dispatch' && inputs.scenario == 'queue'
+    runs-on: eratosthenes-labs-typeorm-3357
+    timeout-minutes: 5
+    container: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    steps:
+      - name: Verify native queue release after the first job
+        shell: sh
+        run: |
+          set -eu
+          printf '%s\n' 'repo=typeorm-3357 nonce=${{ inputs.nonce }} job=queue-second'
+          sleep 15
+
+  cancellation-hold:
+    if: github.event_name == 'workflow_dispatch' && inputs.scenario == 'cancel'
+    runs-on: eratosthenes-labs-typeorm-3357
+    timeout-minutes: 8
+    container: docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
+    steps:
+      - name: Remain active until the exact run is canceled by the driver
+        shell: sh
+        run: |
+          set -eu
+          printf '%s\n' 'repo=typeorm-3357 nonce=${{ inputs.nonce }} job=cancellation-hold'
+          sleep 300
